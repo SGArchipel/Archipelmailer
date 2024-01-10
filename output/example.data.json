@@ -1,0 +1,18 @@
+[
+    {
+    "TYPE": "LLN    ",
+    "KLASCODE": "LS-L2C",
+    "NAAMLEERLING": "John",
+    "VOORNAAMLEERLING": "Doe",
+    "MAILADRESSEN": "parent1@gmail.com,parent2@gmail.com",
+    "SCHOOLVERANTWOORDELIJKE": "directie@domein.be"
+  },
+  {
+    "TYPE": "LLN    ",
+    "KLASCODE": "V-L5B",
+    "NAAMLEERLING": "Neil",
+    "VOORNAAMLEERLING": "Armstrong",
+    "MAILADRESSEN": "parent3@gmail.com,parent4@gmail.com",
+    "SCHOOLVERANTWOORDELIJKE": "directie@domein.be"
+  }
+]
