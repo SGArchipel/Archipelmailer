@@ -12,8 +12,10 @@ from typing import List
 import logging
 from googleapiclient.errors import HttpError
 import time
+from datetime import timedelta, datetime
+import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(filename="ArchipelMailer.log", level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # Load .env file
 load_dotenv()
 
@@ -60,7 +62,6 @@ domain_name = os.getenv("DOMAIN")
 def load_json_data():
     # Make request to WISA in JSON format
     url = f"{base_url}&_username_={username_env}&_password_={password_env}&format=json"
-    print(url)
     response = requests.get(url)
     if response.status_code == 200:
         json_data = json.loads(response.text)
@@ -72,6 +73,7 @@ def load_json_data():
         return json_data
     else:
         print(f"Error loading json data: {response.status_code}")
+        logging.info(f"Error loading json data: {response.status_code}")
         return None
 
 # Function to generate address of group based on code from WISA
@@ -101,13 +103,14 @@ def add_member_to_group(service, group_email, member_email, wrong_mails):
         
     except Exception as e:
         if e.resp.status == 409 and 'duplicate' in str(e):
+            logging.info(f"Error when trying to add {member_email} to the group {group_email}: duplicate")
             print(f"Error when trying to add {member_email} to the group {group_email}: duplicate")
         elif e.resp.status == 404: # Google gives this error code when a google account does not exist.
-            print(f"Error when trying to add {member_email} to the group {group_email}: mailadres has an error in there")
             # store all the faulty mailadresses for an overview at the end of the script
             wrong_mails.add(f"{member_email} gives an error, group_name: {group_email}")
         else:
             print(f"Error when trying to add {member_email} to the group {group_email}: {e}")
+            logging.info(f"Error when trying to add {member_email} to the group {group_email}: {e}")
 
 
 def create_google_group_if_not_exists(service, email, name, description):
@@ -115,6 +118,7 @@ def create_google_group_if_not_exists(service, email, name, description):
         # Try to get the group from the api, if it gives an error, the function can create one
         existing_group = service.groups().get(groupKey=email).execute()
         print(f"Group {email} already exists.")
+        logging.info(f"Group {email} already exists.")
         return existing_group
     except HttpError as e:
         # If the group is not found, create a new one
@@ -127,11 +131,14 @@ def create_google_group_if_not_exists(service, email, name, description):
                 }).execute()
 
                 print(f"{created_group} has been created")
+                logging.info(f"{created_group} has been created")
                 return created_group
             except HttpError as create_error:
+                logging.info(f"Error when creating group {email}: {create_error}")
                 print(f"Error when creating group {email}: {create_error}")
                 return None
         else:
+            logging.info(f"Error when retrieving group {email}: {e}")
             print(f"Error when retrieving group {email}: {e}")
             return None
         
@@ -141,6 +148,7 @@ def get_group_members(service, group_email):
         members = service.members().list(groupKey=group_email).execute()
         return [member['email'] for member in members.get('members', [])]
     except Exception as e:
+        logging.info(f"Error when retrieving the members of {group_email}: {e}")
         print(f"Error when retrieving the members of {group_email}: {e}")
         return []
 
@@ -150,27 +158,36 @@ def generate_email_variations(email):
     local_part = parts[0]
     domain_part = parts[1]
 
-    # Function to create variations of mailadres with dots between every character in the first part of the mailadress
     def generate_variations_with_dots(part):
-        result = []
-        for i in range(len(part) - 1):
-            variation = part[:i + 1] + "." + part[i + 1:]
-            result.append(variation)
+        result = [part[:i] + "." + part[i:] for i in range(len(part))]
         return result
 
-    local_part_variations = generate_variations_with_dots(local_part)
+    def generate_variations_with_two_dots(part):
+        result = [part[:i] + "." + part[i:j] + "." + part[j:] for i in range(len(part) - 1) for j in range(i + 1, len(part))]
+        return result
 
-    for i in range(len(local_part_variations)):
-        variation = f"{local_part_variations[i]}@{domain_part}"
-        variations.add(variation)
+    local_part_variations = generate_variations_with_dots(local_part) + generate_variations_with_two_dots(local_part)
+
+    for variation in local_part_variations:
+        variations.add(f"{variation}@{domain_part}")
+        variations.add(f"{variation}@googlemail.com")
+
+    # add variation without dots
+    variation_without_dot = local_part.replace('.', '')
+    variations.add(f"{variation_without_dot}@{domain_part}")
+    variations.add(f"{variation_without_dot}@googlemail.com")
+    variations.add(f"{local_part}@googlemail.com")
 
     return variations
+
+
 def remove_member_from_group(service, group_email, member_email):
     # remove a member from a specific group
     try:
         service.members().delete(groupKey=group_email, memberKey=member_email).execute()
         print(f"Email address {member_email} removed from group {group_email}")
     except Exception as e:
+        logging.info(f"Error when removing {member_email} from group {group_email}: {e}")
         print(f"Error when removing {member_email} from group {group_email}: {e}")
 
 
@@ -211,6 +228,7 @@ def get_google_groups(service):
 
         while True:
             print("Getting groups....")
+            logging.info("Getting groups....")
             response = service.groups().list(customer='my_customer', pageToken=page_token).execute()
             groups = response.get('groups', [])
 
@@ -231,9 +249,11 @@ def get_google_groups(service):
 
     except HttpError as e:
         print(f"Error when retrieving google groups (HTTP-error): {e}")
+        logging.info(f"Error when retrieving google groups (HTTP-error): {e}")
         return {}
     except Exception as e:
         print(f"General error when retrieving groups: {e}")
+        logging.info(f"General error when retrieving groups: {e}")
         return {}
 
 
@@ -258,30 +278,65 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                     if mailadress.lower() in directory_mailadressen:
                         mailadressen_to_delete_from_removelist.add(mailadress)
                         print(f"{mailadress} removed from delete list")
-                    all_variations = generate_email_variations(mailadress)
-                    all_variations.add(mailadress.split('@')[0].replace('.', ''))
-                    for variation in all_variations:
-                        if variation.lower() in directory_mailadressen:
-                            mailadressen_to_delete_from_removelist.add(mailadress)
-                            print(f"{mailadress} removed from delete list")
+                    else:
+                        all_variations = generate_email_variations(mailadress)
+                        for variation in all_variations:      
+                            if variation.lower() in directory_mailadressen:
+                                mailadressen_to_delete_from_removelist.add(mailadress)
+                                print(f"{mailadress} removed from delete list")
                 elif mailadress.lower().endswith("@googlemail.com"): # when adding a @gmail.com address, in some cases google transforms it to a @googlemail.com address (don't ask why :) )
                     parts = mailadress.split('@')
                     local_part = parts[0]
                     googlemail_to_gmail = f"{local_part}@gmail.com"
                     if googlemail_to_gmail in directory_mailadressen:
                         mailadressen_to_delete_from_removelist.add(mailadress)
+                    else:
+                        all_variations = generate_email_variations(mailadress)
+                        for variation in all_variations:      
+                            if variation.lower() in directory_mailadressen:
+                                mailadressen_to_delete_from_removelist.add(mailadress)
+                                print(f"{mailadress} removed from delete list")
             addresses_to_remove -= mailadressen_to_delete_from_removelist
 
             for mailadres_to_remove in addresses_to_remove:
                 remove_member_from_group(service, groepsadres, mailadres_to_remove)
-                
+            
+            addresses_to_remove_from_add_list=set()
+            for emailaddress in addresses_to_add:
+                if emailaddress.endswith("@gmail.com"):
+                    if emailaddress in google_addresses:
+                        addresses_to_remove_from_add_list.add(emailaddress)
+                        print(f"{emailaddress} removed from add list")
+                    else:
+                        all_variations=generate_email_variations(emailaddress)
+                        for variation in all_variations:
+                            if variation.lower() in google_addresses:
+                                addresses_to_remove_from_add_list.add(emailaddress)
+                                print(f"{emailaddress} removed from add list")
+                elif mailadress.lower().endswith("@googlemail.com"): # when adding a @gmail.com address, in some cases google transforms it to a @googlemail.com address (don't ask why :) )
+                    parts = mailadress.split('@')
+                    local_part = parts[0]
+                    googlemail_to_gmail = f"{local_part}@gmail.com"
+                    if googlemail_to_gmail in google_addresses:
+                        addresses_to_remove_from_add_list.add(mailadress)
+                    else:
+                        all_variations=generate_email_variations(emailaddress)
+                        for variation in all_variations:
+                            if variation.lower() in google_addresses:
+                                addresses_to_remove_from_add_list.add(emailaddress)
+                                print(f"{emailaddress} removed from add list")
+
+            addresses_to_add -= addresses_to_remove_from_add_list
+
             for mailadres_to_add in addresses_to_add:            
                 add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen)
                   
             
-            print(f"Sync complete for group: {groepsadres}") 
+            print(f"Sync complete for group: {groepsadres}")
+            logging.info(f"Sync complete for group: {groepsadres}")
         else:
             print(f"Google group {groepsadres} not found, creating new group.")
+            logging.info(f"Google group {groepsadres} not found, creating new group.")
             schoolcode = groepsadres.split('@')[1].split('.')[0].upper()
 
             try:
@@ -292,25 +347,33 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                     f"Individuele groep om te mailen naar ouders met als groepsadres {groepsadres}",
                 )
             except Exception as e:
-                print(f"Fout bij het aanmaken van Google Groep {groepsadres}: {e}") 
+                print(f"Error when creating Google group {groepsadres}: {e}") 
+                logging.info(f"Error when creating Google group {groepsadres}: {e}")
 
             for mailadres_to_add in directory_mailadressen:
                 try:
                     add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen)
                     print(f"email address {mailadres_to_add} added to group {groepsadres}")
+                    logging.info(f"email address {mailadres_to_add} added to group {groepsadres}")
                 except HttpError as e:
                     if e.resp.status == 409 and 'duplicate' in str(e):
                         existing_members = get_group_members(service, groepsadres)
                         if mailadres_to_add.lower() in existing_members:
                             print(f"Email address {mailadres_to_add} is aldready member of group {groepsadres}")
+                            logging.info(f"Email address {mailadres_to_add} is aldready member of group {groepsadres}")
                         else:
                             print(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}") 
+                            logging.info(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}")
                     else:
                         print(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}")
+                        logging.info(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}")
     return foute_mailadressen
 
 # main script
 def main():
+    start_time=time.time()
+    current_time = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+    logging.info(f"Script started on: {current_time}")
     try:
         service = create_directory_service()
         data = load_json_data()
@@ -322,10 +385,23 @@ def main():
             foute_mailadressen=compare_and_sync_maps(directory_map, google_group_map, service, foute_mailadressen)
         
         print("\nEmail addresses with an error:")
+        logging.info("Email addresses with an error:")
         for mailadres in foute_mailadressen:
             print(mailadres)
+            logging.info(mailadres)
     except Exception as e:
         print(f"Unexpected error: {e}")
+        logging.info(f"Unexpected error: {e}")
+    end_time=time.time()
+    elapsed_time=end_time-start_time
+    delta_time=timedelta(seconds=elapsed_time)
+    # Extract hours, minutes, and seconds
+    hours, remainder = divmod(delta_time.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
 
+    # Print the elapsed time in a human-readable format
+    logging.info(f"Script execution time: {hours} hours, {minutes} minutes, {seconds} seconds")
+    current_time = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+    logging.info(f"Script ended on: {current_time}")
 if __name__ == "__main__":
     main()

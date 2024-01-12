@@ -1,3 +1,4 @@
 .env
 token.json
 output/data.json
+ArchipelMailer.log
