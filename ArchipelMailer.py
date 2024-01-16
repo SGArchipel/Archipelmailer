@@ -14,6 +14,8 @@ from googleapiclient.errors import HttpError
 import time
 from datetime import timedelta, datetime
 import logging
+import smtplib
+from email.mime.text import MIMEText
 
 logging.basicConfig(filename="ArchipelMailer.log", level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # Load .env file
@@ -95,22 +97,31 @@ def generate_google_group_address(class_code):
     else:
         return f"unknown_klascode_{class_code_suffix}@{domain_name}"
 
-def add_member_to_group(service, group_email, member_email, wrong_mails):
+def add_member_to_group(service, group_email, member_email, wrong_mails, added_addresses):
     try:
         # Add member to a google group
         service.members().insert(groupKey=group_email, body={"email": member_email, "role": "MEMBER"}).execute()
-        print(f"E-mailadres {member_email} toegevoegd aan de groep {group_email}")
+        print(f"E-mailadres {member_email} added to group: {group_email}")
+        logging.info(f"E-mailadres {member_email} added to group: {group_email}")
+        #added_addresses.add(f"E-mailadres {member_email} added to group: {group_email}")
+        if group_email not in added_addresses:
+            added_addresses[group_email]=set()
+        
+        added_addresses[group_email].add(member_email)
         
     except Exception as e:
-        if e.resp.status == 409 and 'duplicate' in str(e):
+        if hasattr(e, 'resp') and e.resp.status == 409 and 'duplicate' in str(e):
             logging.info(f"Error when trying to add {member_email} to the group {group_email}: duplicate")
             print(f"Error when trying to add {member_email} to the group {group_email}: duplicate")
-        elif e.resp.status == 404: # Google gives this error code when a google account does not exist.
-            # store all the faulty mailadresses for an overview at the end of the script
-            wrong_mails.add(f"{member_email} gives an error, group_name: {group_email}")
+        elif hasattr(e, 'resp') and e.resp.status == 404:
+            # Google gives this error code when a google account does not exist.
+            # store all the faulty mail addresses for an overview at the end of the script
+            if group_email not in wrong_mails:
+                wrong_mails[group_email]=set()
+            wrong_mails[group_email].add(member_email)
         else:
             print(f"Error when trying to add {member_email} to the group {group_email}: {e}")
-            logging.info(f"Error when trying to add {member_email} to the group {group_email}: {e}")
+            logging.error(f"Error when trying to add {member_email} to the group {group_email}: {e}")
 
 
 def create_google_group_if_not_exists(service, email, name, description):
@@ -181,11 +192,14 @@ def generate_email_variations(email):
     return variations
 
 
-def remove_member_from_group(service, group_email, member_email):
+def remove_member_from_group(service, group_email, member_email, deleted_addresses):
     # remove a member from a specific group
     try:
         service.members().delete(groupKey=group_email, memberKey=member_email).execute()
         print(f"Email address {member_email} removed from group {group_email}")
+        if group_email not in deleted_addresses:
+            deleted_addresses[group_email]=set()
+        deleted_addresses[group_email].add(member_email)
     except Exception as e:
         logging.info(f"Error when removing {member_email} from group {group_email}: {e}")
         print(f"Error when removing {member_email} from group {group_email}: {e}")
@@ -258,7 +272,7 @@ def get_google_groups(service):
 
 
     
-def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadressen):
+def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadressen,added_addresses,deleted_addresses):
     # in theory a straight forward function to compare the google group map and the directory map but google does some weird things.
     # when adding a gmail adres to a google group, sometimes the api removes or adds dots to the first part of the email address ex. john.doe@gmail.com -> johndoe@gmail.com
     # therefore before removing or adding an email we have to check that the email address is not in the google group under a different form.
@@ -299,7 +313,7 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
             addresses_to_remove -= mailadressen_to_delete_from_removelist
 
             for mailadres_to_remove in addresses_to_remove:
-                remove_member_from_group(service, groepsadres, mailadres_to_remove)
+                remove_member_from_group(service, groepsadres, mailadres_to_remove,deleted_addresses)
             
             addresses_to_remove_from_add_list=set()
             for emailaddress in addresses_to_add:
@@ -329,7 +343,7 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
             addresses_to_add -= addresses_to_remove_from_add_list
 
             for mailadres_to_add in addresses_to_add:            
-                add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen)
+                add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen,added_addresses)
                   
             
             print(f"Sync complete for group: {groepsadres}")
@@ -352,7 +366,7 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
 
             for mailadres_to_add in directory_mailadressen:
                 try:
-                    add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen)
+                    add_member_to_group(service, groepsadres, mailadres_to_add,foute_mailadressen,added_addresses)
                     print(f"email address {mailadres_to_add} added to group {groepsadres}")
                     logging.info(f"email address {mailadres_to_add} added to group {groepsadres}")
                 except HttpError as e:
@@ -367,7 +381,79 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                     else:
                         print(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}")
                         logging.info(f"Error when adding {mailadres_to_add} to the group {groepsadres}: {e}")
-    return foute_mailadressen
+    print(foute_mailadressen)
+    return foute_mailadressen,added_addresses,deleted_addresses
+
+def send_email(added_addresses, deleted_addresses, wrong_addresses):
+     # Set email info
+    message = ""
+    
+    if added_addresses:
+        message += "\nAdded addresses:"
+        for group_email, members in added_addresses.items():
+            message += f"\nMembers added to group: {group_email}"
+            for member in members:
+                message += f"\n- {member}"
+
+    else:
+        message += "\nNo added addresses"
+
+    if deleted_addresses:
+        message += "\nDeleted addresses:"
+        for group_email, members in deleted_addresses.items():
+            message += f"\nMembers deleted from group: {group_email}"
+            for member in members:
+                message += f"\n- {member}"
+
+    else:
+        message += "\nNo deleted addresses"
+
+    if wrong_addresses:
+        message += "\nWrong addresses:"
+        for group_email, members in wrong_addresses.items():
+            message += f"\nWrong address in group: {group_email}"
+            for member in members:
+                message += f"\n- {member}"
+
+    else:
+        message += "\nNo wrong addresses"
+
+    SENDER_EMAIL_LOGIN = os.getenv("SENDER_EMAIL_LOGIN")
+    SENDER_EMAIL_PASSWORD = os.getenv("SENDER_EMAIL_PASSWORD")
+    RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    smtp_username = SENDER_EMAIL_LOGIN
+    smtp_password = SENDER_EMAIL_PASSWORD
+
+    # Email setup
+    msg = MIMEText(message)
+    msg['Subject'] = 'Archipelmailer Sync Report'
+    msg['From'] = smtp_username
+    msg['To'] = RECEIVER_EMAIL  # Replace with the recipient's email address
+
+    try:
+        # Connect to the SMTP server
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_username, smtp_password)
+
+        # Send the email
+        server.sendmail(smtp_username, msg['To'], msg.as_string())
+        print("Email sent successfully!")
+        logging.info("Email sent successfully!")
+
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        logging.error(f"Error sending email: {e}")
+
+    finally:
+        # Disconnect from the SMTP server
+        server.quit()
+
+    print(message)
+    logging.info(message)
 
 # main script
 def main():
@@ -377,18 +463,16 @@ def main():
     try:
         service = create_directory_service()
         data = load_json_data()
-        foute_mailadressen=set()
-
+        foute_mailadressen={}
+        added_addresses={}
+        deleted_addresses={}
         if data:
             directory_map = group_mailaddresses_by_json(data)
             google_group_map = get_google_groups(service)
-            foute_mailadressen=compare_and_sync_maps(directory_map, google_group_map, service, foute_mailadressen)
+            foute_mailadressen,added_addresses,deleted_addresses=compare_and_sync_maps(directory_map, google_group_map, service, foute_mailadressen,added_addresses,deleted_addresses)
         
-        print("\nEmail addresses with an error:")
-        logging.info("Email addresses with an error:")
-        for mailadres in foute_mailadressen:
-            print(mailadres)
-            logging.info(mailadres)
+        send_email(added_addresses, deleted_addresses, foute_mailadressen)
+
     except Exception as e:
         print(f"Unexpected error: {e}")
         logging.info(f"Unexpected error: {e}")
