@@ -249,7 +249,7 @@ def get_google_groups(service):
             for group in groups:
                 group_email = group.get('email', '')
                 # Add only groups that do not end with "@yourdomain.be" because in this script we use subdomains of @yourdomain.be 
-                if not group_email.endswith(f"@{domain_name}") and not group_email.endswith("@hhhbao.be") and not group_email.startswith("alle.ouders@"):
+                if not group_email.endswith(f"@{domain_name}") and not group_email.endswith("@hhhbao.be") and "ouders" not in group_email:
                     members = get_group_members(service, group_email)
                     # Convert email addresses to lowercase
                     members = [member.lower() for member in members]
@@ -310,6 +310,8 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                             if variation.lower() in directory_mailadressen:
                                 mailadressen_to_delete_from_removelist.add(mailadress)
                                 print(f"{mailadress} removed from delete list")
+                elif mailadress.lower().startswith("directie.") and mailadress.lower().endswith("@sgarchipel.be"):
+                    mailadressen_to_delete_from_removelist.add(mailadress)
             addresses_to_remove -= mailadressen_to_delete_from_removelist
 
             for mailadres_to_remove in addresses_to_remove:
@@ -327,19 +329,19 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                             if variation.lower() in google_addresses:
                                 addresses_to_remove_from_add_list.add(emailaddress)
                                 print(f"{emailaddress} removed from add list")
-                elif mailadress.lower().endswith("@googlemail.com"): # when adding a @gmail.com address, in some cases google transforms it to a @googlemail.com address (don't ask why :) )
-                    parts = mailadress.split('@')
+                elif emailaddress.lower().endswith("@googlemail.com"): # when adding a @gmail.com address, in some cases google transforms it to a @googlemail.com address (don't ask why :) )
+                    parts = emailaddress.split('@')
                     local_part = parts[0]
                     googlemail_to_gmail = f"{local_part}@gmail.com"
                     if googlemail_to_gmail in google_addresses:
-                        addresses_to_remove_from_add_list.add(mailadress)
+                        addresses_to_remove_from_add_list.add(emailaddress)
                     else:
                         all_variations=generate_email_variations(emailaddress)
                         for variation in all_variations:
                             if variation.lower() in google_addresses:
                                 addresses_to_remove_from_add_list.add(emailaddress)
                                 print(f"{emailaddress} removed from add list")
-
+                
             addresses_to_add -= addresses_to_remove_from_add_list
 
             for mailadres_to_add in addresses_to_add:            
@@ -429,7 +431,11 @@ def send_email(added_addresses, deleted_addresses, wrong_addresses):
 
     # Email setup
     msg = MIMEText(message)
-    msg['Subject'] = 'Archipelmailer Sync Report'
+    # Get current date in dd/mm/yyyy format
+    current_date = datetime.now().strftime("%d/%m/%Y")
+
+    # Update the subject with the current date
+    msg['Subject'] = f'Archipelmailer Sync Report - {current_date}'
     msg['From'] = smtp_username
     msg['To'] = RECEIVER_EMAIL  # Replace with the recipient's email address
 
