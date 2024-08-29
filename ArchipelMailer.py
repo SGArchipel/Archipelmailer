@@ -49,9 +49,9 @@ INSTELLINGSNUMMERS = os.getenv("INSTELLINGSNUMMERS")
 today = date.today()
 
 if today.month==7:
-    today=today.replace(day=30,month=6) # If today is in july, change the date to 30/6/year
+    today=today.replace(day=28,month=6) # If today is in july, change the date to 28/6/year
 elif today.month==8:
-    today=today.replace(day=1,month=9) # If today is in august, change the date to 1/9/year
+    today=today.replace(day=2,month=9) # If today is in august, change the date to 2/9/year
 
 # Format date so that it works for WISA
 formatted_date = today.strftime("%d/%m/%Y")
@@ -89,7 +89,7 @@ def generate_google_group_address(class_code):
         
         # Mapping of first parts of class code
         # in this example: when 'LS' -> transform to hhhls for the group address
-        klascode_mappings = {"v": "vl", "oh": "wz", "ls": "hhhls", "ks": "hhhks", "oudhe": "wz", "bl": "bolo", "z": "zb", "j": "sk", "m": "moza"}
+        klascode_mappings = {"v": "vl", "oh": "wz", "ls": "hhhls", "ks": "hhhks", "oudhe": "wz", "bl": "bolo", "z": "zb", "j": "sk", "m": "moza", "a" : "vl"}
         first_part = klascode_mappings.get(first_part, first_part)
         
         # in this example returns: l2c@hhhls.sgarchipel.be
