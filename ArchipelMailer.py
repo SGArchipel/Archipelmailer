@@ -16,6 +16,7 @@ from datetime import timedelta, datetime
 import logging
 import smtplib
 from email.mime.text import MIMEText
+import base64
 
 logging.basicConfig(filename="ArchipelMailer.log", level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # Load .env file
@@ -386,8 +387,34 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
     print(foute_mailadressen)
     return foute_mailadressen,added_addresses,deleted_addresses
 
+def authenticate_mail():
+    load_dotenv()  # Laad de .env variabelen
+    SCOPES=json.loads(os.getenv('SCOPES_MAIL'))
+    creds = None
+    # Haal de credentials op vanuit de .env
+    credentials_info = json.loads(os.getenv('CREDENTIALS_MAIL'))
+
+    # Controleer of token.json bestaat (het opgeslagen toegangstoken)
+    if os.path.exists('tokenmail.json'):
+        creds = Credentials.from_authorized_user_file('tokenmail.json', SCOPES)
+    # Als er geen geldige credentials zijn, authenticeer dan opnieuw
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_config(credentials_info, SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Sla de credentials op in token.json
+        with open('tokenmail.json', 'w') as token:
+            token.write(creds.to_json())
+
+    return creds
+
 def send_email(added_addresses, deleted_addresses, wrong_addresses):
-     # Set email info
+    creds = authenticate_mail()
+    service = build('gmail', 'v1', credentials=creds)
+    
+    # Bouw het bericht
     message = ""
     
     if added_addresses:
@@ -396,7 +423,6 @@ def send_email(added_addresses, deleted_addresses, wrong_addresses):
             message += f"\nMembers added to group: {group_email}"
             for member in members:
                 message += f"\n- {member}"
-
     else:
         message += "\nNo added addresses"
 
@@ -406,7 +432,6 @@ def send_email(added_addresses, deleted_addresses, wrong_addresses):
             message += f"\nMembers deleted from group: {group_email}"
             for member in members:
                 message += f"\n- {member}"
-
     else:
         message += "\nNo deleted addresses"
 
@@ -416,48 +441,33 @@ def send_email(added_addresses, deleted_addresses, wrong_addresses):
             message += f"\nWrong address in group: {group_email}"
             for member in members:
                 message += f"\n- {member}"
-
     else:
         message += "\nNo wrong addresses"
 
-    SENDER_EMAIL_LOGIN = os.getenv("SENDER_EMAIL_LOGIN")
-    SENDER_EMAIL_PASSWORD = os.getenv("SENDER_EMAIL_PASSWORD")
-    RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+    # Haal e-mail gegevens uit omgevingsvariabelen
+    sender_email = os.getenv('SENDER_EMAIL_LOGIN')
+    receiver_email = os.getenv('RECEIVER_EMAIL')
 
-    smtp_server = 'smtp.gmail.com'
-    smtp_port = 587
-    smtp_username = SENDER_EMAIL_LOGIN
-    smtp_password = SENDER_EMAIL_PASSWORD
-
-    # Email setup
+    # Stel het e-mailbericht in
     msg = MIMEText(message)
-    # Get current date in dd/mm/yyyy format
     current_date = datetime.now().strftime("%d/%m/%Y")
-
-    # Update the subject with the current date
     msg['Subject'] = f'Archipelmailer Sync Report - {current_date}'
-    msg['From'] = smtp_username
-    msg['To'] = RECEIVER_EMAIL  # Replace with the recipient's email address
+    msg['From'] = sender_email
+    msg['To'] = receiver_email
 
+    # Encodeer het bericht in base64
+    raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
+
+    # Verstuur het e-mailbericht via de Gmail API
     try:
-        # Connect to the SMTP server
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(smtp_username, smtp_password)
+        sent_message = service.users().messages().send(userId='me', body={'raw': raw_message}).execute()
+        print(f"Message Id: {sent_message['id']}")
+        logging.info(f"Message Id: {sent_message['id']}")
+    except Exception as error:
+        print(f"An error occurred: {error}")
+        logging.error(f"An error occurred: {error}")
 
-        # Send the email
-        server.sendmail(smtp_username, msg['To'], msg.as_string())
-        print("Email sent successfully!")
-        logging.info("Email sent successfully!")
-
-    except Exception as e:
-        print(f"Error sending email: {e}")
-        logging.error(f"Error sending email: {e}")
-
-    finally:
-        # Disconnect from the SMTP server
-        server.quit()
-
+    # Print en log de inhoud van het bericht
     print(message)
     logging.info(message)
 
