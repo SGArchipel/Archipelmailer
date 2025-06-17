@@ -313,6 +313,8 @@ def compare_and_sync_maps(directory_map, google_group_map, service,foute_mailadr
                                 print(f"{mailadress} removed from delete list")
                 elif mailadress.lower().startswith("directie.") and mailadress.lower().endswith("@sgarchipel.be"):
                     mailadressen_to_delete_from_removelist.add(mailadress)
+                elif mailadress.lower().startswith("secretariaat.") and mailadress.lower().endswith("@sgarchipel.be"):
+                    mailadressen_to_delete_from_removelist.add(mailadress)
             addresses_to_remove -= mailadressen_to_delete_from_removelist
 
             for mailadres_to_remove in addresses_to_remove:
